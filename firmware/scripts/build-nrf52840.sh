@@ -12,6 +12,18 @@ OUT="$ROOT/firmware/build/out/nrf52840"
 
 git config --global --add safe.directory '*' 2>/dev/null || true
 
+# The SDK registers itself under the image user's home; CI runners replace HOME, so point at it directly
+if [ -z "${ZEPHYR_SDK_INSTALL_DIR:-}" ]; then
+  for d in /opt/toolchains/zephyr-sdk-* /opt/zephyr-sdk-* "$HOME"/zephyr-sdk-*; do
+    [ -d "$d" ] && export ZEPHYR_SDK_INSTALL_DIR="$d"
+  done
+fi
+if [ -z "${ZEPHYR_SDK_INSTALL_DIR:-}" ]; then
+  echo "Zephyr SDK not found: set ZEPHYR_SDK_INSTALL_DIR" >&2
+  exit 1
+fi
+echo "Zephyr SDK: $ZEPHYR_SDK_INSTALL_DIR"
+
 if [ ! -d "$WS/.west" ]; then
   west init -m https://github.com/zephyrproject-rtos/zephyr --mr "$ZEPHYR_VERSION" "$WS"
   # only the modules an nRF52840 Bluetooth build needs
