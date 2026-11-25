@@ -7,3 +7,6 @@ dist/
 .DS_Store
 *.json.out
 results*.json
+
+# firmware build outputs
+firmware/build/

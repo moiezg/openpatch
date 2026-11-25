@@ -1,0 +1,71 @@
+/*
+ * OpenPatch pin map on the Seeed XIAO nRF52840
+ *
+ *  D0  P0.02  STEP            -> DRV8834 STEP (also wired to safety MCU PA1)
+ *  D1  P0.03  DIR             -> DRV8834 DIR
+ *  D2  P0.28  nSLEEP          -> DRV8834 nSLEEP (driver off between pulses)
+ *  D3  P0.29  HX711 DOUT      <- load cell amplifier
+ *  D4  P0.04  HX711 SCK       -> load cell amplifier
+ *  D5  P0.05  HEARTBEAT       -> safety MCU PA2 (toggles while firmware is healthy)
+ *  D6  P1.11  ALARM_REQ       -> safety MCU PA6 (buzzer request)
+ *  D7  P1.12  MOTOR_OFF       <- safety MCU PA7 (high = motor power cut)
+ *  D8  P1.13  BUTTON          <- to GND (also wired to safety MCU PA3)
+ *  D9  P1.14  LIMIT           <- home + end-of-travel switches, wired-OR to GND
+ *  D10 P1.15  DOOR            <- reservoir door switch, closed = GND
+ *  P0.31/AIN7 battery divider (on the XIAO), enabled by P0.14 low
+ */
+
+/ {
+	zephyr,user {
+		step-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+		dir-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+		sleep-gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;
+		hx-dout-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
+		hx-sck-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+		heartbeat-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+		alarm-req-gpios = <&gpio1 11 GPIO_ACTIVE_HIGH>;
+		motor-off-gpios = <&gpio1 12 GPIO_ACTIVE_HIGH>;
+		button-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		limit-gpios = <&gpio1 14 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		door-gpios = <&gpio1 15 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		vbat-en-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+		io-channels = <&adc 7>;
+	};
+};
+
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	channel@7 {
+		reg = <7>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN7>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* The XIAO's header pins double as UART/I2C/SPI; free them for GPIO use */
+&uart0 { status = "disabled"; };
+&i2c0 { status = "disabled"; };
+&i2c1 { status = "disabled"; };
+&spi0 { status = "disabled"; };
+&spi1 { status = "disabled"; };
+&spi2 { status = "disabled"; };
+
+/* Shrink the app partition to make room for a 192 KB append-only delivery history log */
+&code_partition {
+	reg = <0x00027000 0x00095000>;
+};
+
+&flash0 {
+	partitions {
+		history_partition: partition@bc000 {
+			label = "history";
+			reg = <0x000bc000 0x00030000>;
+		};
+	};
+};

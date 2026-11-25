@@ -37,6 +37,7 @@ data**. Both are flagged in the app until you replace them in Settings.
 | [docs/SOFTWARE_SPEC.md](docs/SOFTWARE_SPEC.md) | architecture, algorithm, API, deployment (Mac → Pi Zero → on-pump), CGM setup |
 | [docs/SAFETY.md](docs/SAFETY.md) | hazards, mitigations, the six gates required before closed loop |
 | `openpatch/` | Python package: controller, safety guard, pump protocol and firmware model, simulator, server, PWA |
+| [firmware/](firmware/README.md) | C firmware for the pump (nRF52840) and safety MCU (ATtiny1616); builds anywhere via Docker or GitHub Actions |
 | `tests/` | `python3 -m unittest discover -s tests -t .` |
 
 ## Simulation snapshot

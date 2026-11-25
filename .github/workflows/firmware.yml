@@ -1,0 +1,50 @@
+name: firmware
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Python model + C firmware core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit, parity and simulation tests (builds the C core with -Werror)
+        run: firmware/scripts/test-host.sh -v
+
+  nrf52840:
+    name: Pump firmware (nRF52840 / Zephyr)
+    runs-on: ubuntu-latest
+    container: ghcr.io/zephyrproject-rtos/ci:v0.27.4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Zephyr workspace
+        uses: actions/cache@v4
+        with:
+          path: firmware/build/zephyr-ws
+          key: zephyr-ws-v4.1.0-${{ hashFiles('firmware/scripts/build-nrf52840.sh') }}
+      - name: Build
+        run: firmware/scripts/build-nrf52840.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openpatch-pump-nrf52840
+          path: firmware/build/out/nrf52840/
+          if-no-files-found: error
+
+  attiny1616:
+    name: Safety MCU firmware (ATtiny1616)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (Docker toolchain image)
+        run: firmware/build.sh attiny1616
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openpatch-safety-attiny1616
+          path: firmware/build/out/attiny1616/
+          if-no-files-found: error

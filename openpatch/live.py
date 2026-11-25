@@ -208,6 +208,7 @@ class LiveService:
             elif mode == "ble":
                 from .pump.ble import BleTransport
                 pump, baseline = ProtocolPumpDriver(BleTransport(self.raw["pump"]["address"]), key), True
+                pump.set_time(int(now_minutes()))   # the pump has no battery-backed clock
             else:
                 pump, baseline = InjectionPump(self.treatments), False
             allowed, _ = self.closed_loop_allowed()

@@ -12,7 +12,7 @@ class PumpError(Exception):
 class DeliveryRecord:
     time: float
     units: float
-    kind: str   # "basal" | "bolus"
+    kind: str   # "basal" | "bolus" | "prime" (prime fills the tubing and never reaches the body)
 
 
 @dataclass
@@ -27,6 +27,7 @@ class PumpStatus:
     bolus_remaining: float
     alarms: list[str] = field(default_factory=list)     # delivery-stopping conditions
     warnings: list[str] = field(default_factory=list)   # informational (low reservoir, low battery)
+    state: str = "running"
 
 
 class PumpDriver(ABC):

@@ -98,7 +98,7 @@ class LoopEngine:
         return [c for c in self.carbs if c.time <= now]
 
     def history(self, now: float):
-        return [r for r in self.pump.delivery_history(now - 1440) if r.time <= now]
+        return [r for r in self.pump.delivery_history(now - 1440) if r.time <= now and r.kind != "prime"]
 
     def net_doses(self, now: float, history=None) -> list[Dose]:
         since = now - self.profile.dia_min

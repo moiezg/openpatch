@@ -6,10 +6,12 @@ from typing import Callable
 from .base import DeliveryRecord, PumpDriver, PumpError, PumpStatus
 from .firmware import ALARM_NAMES, STOP_MASK
 from .protocol import (
-    CMD_BOLUS, CMD_CANCEL_TEMP, CMD_CLEAR_ALARMS, CMD_HISTORY, CMD_RESUME, CMD_SET_TEMP, CMD_SET_TIME,
-    CMD_STATUS, CMD_SUSPEND, FLAG_SUSPENDED, FLAG_TEMP_ACTIVE, HISTORY_RECORD, STATUS_NAMES, STATUS_PAYLOAD,
-    ST_OK, ProtocolError, decode, encode,
+    CMD_BOLUS, CMD_CANCEL_TEMP, CMD_CLEAR_ALARMS, CMD_HISTORY, CMD_PRIME, CMD_RESUME, CMD_REWIND,
+    CMD_SET_RESERVOIR, CMD_SET_TEMP, CMD_SET_TIME, CMD_STATUS, CMD_SUSPEND, FLAG_SUSPENDED, FLAG_TEMP_ACTIVE,
+    HISTORY_PAGE, HISTORY_RECORD, STATE_NAMES, STATUS_NAMES, STATUS_PAYLOAD, ST_OK, ProtocolError, decode, encode,
 )
+
+KIND_NAMES = {0: "basal", 1: "bolus", 2: "prime"}
 
 Transport = Callable[[bytes], bytes]
 
@@ -49,7 +51,7 @@ class ProtocolPumpDriver(PumpDriver):
         self._call(CMD_SET_TIME, struct.pack(">I", int(minute)))
 
     def status(self) -> PumpStatus:
-        (minute, res_cu, batt, flags, temp_cu, temp_rem, alarms, hour_cu, bolus_cu) = \
+        (minute, res_cu, batt, flags, temp_cu, temp_rem, alarms, hour_cu, bolus_cu, state) = \
             STATUS_PAYLOAD.unpack(self._call(CMD_STATUS))
         stop = [n for bit, n in ALARM_NAMES.items() if alarms & bit and bit & STOP_MASK]
         warn = [n for bit, n in ALARM_NAMES.items() if alarms & bit and not bit & STOP_MASK]
@@ -57,6 +59,7 @@ class ProtocolPumpDriver(PumpDriver):
             minute=minute, reservoir_u=res_cu / 100, battery_pct=batt, suspended=bool(flags & FLAG_SUSPENDED),
             temp_rate=temp_cu / 100 if flags & FLAG_TEMP_ACTIVE else None, temp_remaining_min=temp_rem,
             delivered_last_hour=hour_cu / 100, bolus_remaining=bolus_cu / 100, alarms=stop, warnings=warn,
+            state=STATE_NAMES.get(state, str(state)),
         )
 
     def set_temp_basal(self, rate_uph: float, duration_min: int):
@@ -81,6 +84,16 @@ class ProtocolPumpDriver(PumpDriver):
     def clear_alarms(self):
         self._call(CMD_CLEAR_ALARMS)
 
+    # reservoir change: suspend -> rewind -> fill and insert -> set_reservoir -> prime -> resume
+    def rewind(self):
+        self._call(CMD_REWIND)
+
+    def set_reservoir(self, units: float):
+        self._call(CMD_SET_RESERVOIR, struct.pack(">H", round(units * 100)))
+
+    def prime(self, units: float):
+        self._call(CMD_PRIME, struct.pack(">H", round(units * 100)))
+
     def delivery_history(self, since: float) -> list[DeliveryRecord]:
         # Incremental: only minutes at or after the last one seen are re-read from the pump
         if self._fetched_from is None or since < self._fetched_from:
@@ -89,14 +102,14 @@ class ProtocolPumpDriver(PumpDriver):
             self._cursor = self._fetched_from
         cursor = self._cursor
         while True:
-            p = self._call(CMD_HISTORY, struct.pack(">IB", cursor, 30))
+            p = self._call(CMD_HISTORY, struct.pack(">IB", cursor, HISTORY_PAGE))
             n = p[0]
             last = cursor
             for i in range(n):
                 m, cu, kind = HISTORY_RECORD.unpack_from(p, 1 + i * HISTORY_RECORD.size)
                 self._cache[(m, kind)] = cu
                 last = max(last, m)
-            if n < 30 or last == cursor:
+            if n < HISTORY_PAGE or last == cursor:
                 break
             cursor = last
         self._cursor = last
@@ -105,5 +118,5 @@ class ProtocolPumpDriver(PumpDriver):
             for key in [k for k in self._cache if k[0] < horizon]:
                 del self._cache[key]
             self._fetched_from = horizon
-        return sorted((DeliveryRecord(float(m), cu / 100, "bolus" if kind else "basal")
+        return sorted((DeliveryRecord(float(m), cu / 100, KIND_NAMES.get(kind, "unknown"))
                        for (m, kind), cu in self._cache.items() if m >= since), key=lambda r: r.time)

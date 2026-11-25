@@ -20,7 +20,7 @@ RESCUE_CARBS_G = 15
 
 
 def run_simulation(scenario: str = "typical_day", patient: str = "adult_70kg", days: int = 3,
-                   closed_loop: bool = True, seed: int = 1) -> dict:
+                   closed_loop: bool = True, seed: int = 1, firmware: str = "python") -> dict:
     started = time.perf_counter()
     spec = build_scenario(scenario, days, seed)
     profile = derive_profile(patient)
@@ -28,7 +28,11 @@ def run_simulation(scenario: str = "typical_day", patient: str = "adult_70kg", d
     rng = random.Random(seed * 7919 + 17)
 
     body = HovorkaPatient(patient_params(patient), spec.initial_bg, spec.variation)
-    firmware = PumpFirmware(SIM_KEY, profile.basal, FirmwareLimits(
+    if firmware == "c":
+        from ..pump.cfirmware import CPumpFirmware as firmware_cls
+    else:
+        firmware_cls = PumpFirmware
+    firmware = firmware_cls(SIM_KEY, profile.basal, FirmwareLimits(
         max_basal_uph=settings.max_basal_uph, max_bolus_u=settings.max_bolus_u,
         hourly_cap_u=settings.max_bolus_u + settings.max_basal_uph + 1))
     pump = ProtocolPumpDriver(firmware.handle, SIM_KEY)

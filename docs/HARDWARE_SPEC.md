@@ -68,7 +68,7 @@ Choose Option A unless parts are unobtainable.
 | Sensor | Part | Purpose |
 |---|---|---|
 | Occlusion | 1–5 kg micro button load cell + **HX711** between nut and plunger rod | force rises when the line is blocked. Calibrate the threshold so the alarm trips at ≤ 1 U undelivered |
-| Home / end of travel | 2 × micro switch or hall sensor | plunger fully retracted; reservoir empty |
+| Home / end of travel | 2 × micro switch, wired in parallel to one input | plunger fully retracted; reservoir empty (direction of travel tells which one) |
 | Reservoir door | micro switch | no delivery with the door open; rewind only with the door open |
 | Temperature | 10 k NTC near the reservoir (plus nRF die temp) | warn at > 37 °C, since insulin degrades in Indian summers |
 
@@ -90,8 +90,8 @@ Choose Option A unless parts are unobtainable.
 | Motor driver | DRV8834 | STEP line also routed to a safety-MCU counter input |
 | Force ADC | HX711 | 10 Hz is enough |
 | Battery | 1S LiPo 300–500 mAh with protection circuit | 2-week target (see budget below) |
-| Alarms | piezo buzzer (safety MCU), coin vibration motor (main MCU) | an alarm still sounds if the main MCU hangs |
-| UI | one tactile button: press = acknowledge, hold 5 s = suspend | plus one RGB LED |
+| Alarms | **active** 3 V piezo buzzer (has its own oscillator) on the safety MCU via an NPN transistor | an alarm still sounds if the main MCU hangs; the main MCU requests beeps over ALARM_REQ |
+| UI | one tactile button (wired to both MCUs): press = silence warnings 30 min, hold 5 s = suspend (and clears a latched safety fault) | plus the XIAO's on-board RGB LED |
 | Programming | SWD pads + USB | **key provisioning only over USB, never over BLE** |
 
 ### 3.1 The safety MCU (defence in depth)
@@ -117,8 +117,9 @@ Stopping insulin is dangerous over hours (DKA), so every stop must alarm.
 
 ## 4. Firmware (main MCU) requirements
 
-The executable reference is `openpatch/pump/firmware.py`. The C firmware must pass the same tests
-(`tests/test_pump.py`) through a hardware-in-the-loop harness.
+Implemented in [`firmware/`](../firmware/README.md): pin map, wiring, flashing, provisioning and calibration.
+The executable reference is `openpatch/pump/firmware.py`; the C core passes the same tests and
+matches it byte for byte in randomized parity tests.
 
 - **States**: `PROVISION → NO_RESERVOIR → PRIMING → RUNNING ⇄ SUSPENDED → ALARM`.
 - **Delivery scheduler** (every minute): scheduled basal from the profile stored in flash, temp basal
@@ -152,7 +153,7 @@ Prices vary a lot. Sources: Robu.in, Robocraze, Evelta, ElectronicsComp, LCSC/JL
 | TPS22918 load switch | 1 | 50–100 |
 | Micro load cell + HX711 | 1 | 250–500 |
 | 1S LiPo 400 mAh (protected) | 1 | 250–450 |
-| Buzzer, vibration motor, switches, NTC, LED | — | 250–400 |
+| Active buzzer + NPN, switches, NTC | — | 200–350 |
 | PCB fabrication (5 boards) + stencil | — | 800–1,500 |
 | PETG/ASA filament, O-rings, M2 screws, brass nut | — | 300–600 |
 | **Reusable unit total** | | **≈ ₹5,000–8,000** |

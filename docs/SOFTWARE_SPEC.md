@@ -41,7 +41,7 @@ port-forward this server to the public internet.
 | `openpatch/bolus.py` | bolus calculator (carbs + correction − IOB, low lockout, cap) |
 | `openpatch/loop.py` | the 5-minute cycle: CGM → validate → IOB/COB → predict → MPC → guard → pump; activity mode |
 | `openpatch/pump/protocol.py` | wire format: HMAC-SHA256/8 + CRC-16 + seq de-duplication |
-| `openpatch/pump/firmware.py` | executable reference model of the pump firmware (hard limits, hourly cap, occlusion, expiry) |
+| `openpatch/pump/firmware.py` | executable specification of the pump firmware (hard limits, hourly cap, occlusion, expiry, reservoir change, reboot) |
 | `openpatch/pump/driver.py` | one driver for any transport (in-process firmware or BLE) |
 | `openpatch/pump/ble.py` | BLE transport (`bleak`) |
 | `openpatch/cgm/` | CGM sources: Nightscout, xDrip+ local web server, demo |
@@ -50,6 +50,10 @@ port-forward this server to the public internet.
 | `openpatch/server.py` | HTTP API + static PWA, token auth |
 | `openpatch/web/` | PWA (vanilla JS, no CDN, works offline once installed over HTTPS) |
 | `openpatch/cli.py` | command-line interface |
+| `openpatch/pump/cfirmware.py` | loads the C firmware core as a host library so tests and simulations can run on it |
+| `firmware/core/` | the pump firmware core in portable C (same behaviour as `firmware.py`) |
+| `firmware/safety/` | safety MCU logic in portable C |
+| `firmware/nrf52840/`, `firmware/attiny1616/` | hardware layers for the two chips (see `firmware/README.md`) |
 
 ## 3. Control algorithm
 

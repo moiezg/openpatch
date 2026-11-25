@@ -22,6 +22,9 @@ CMD_RESUME = 0x07
 CMD_SET_TIME = 0x08
 CMD_CLEAR_ALARMS = 0x09
 CMD_CANCEL_BOLUS = 0x0A
+CMD_REWIND = 0x0B          # retract plunger for a reservoir change (not while running)
+CMD_SET_RESERVOIR = 0x0C   # payload: centi-units in the newly filled reservoir
+CMD_PRIME = 0x0D           # payload: centi-units to push through the set before connecting it
 
 ST_OK = 0x00
 ST_CRC = 0x01
@@ -37,11 +40,19 @@ STATUS_NAMES = {ST_OK: "ok", ST_CRC: "crc error", ST_AUTH: "authentication faile
                 ST_UNKNOWN: "unknown command", ST_ALARM: "pump alarm active", ST_FORMAT: "malformed payload"}
 
 TAG_LEN = 8
-HISTORY_RECORD = struct.Struct(">IHB")       # minute, centi-units, kind (0 basal, 1 bolus)
-STATUS_PAYLOAD = struct.Struct(">IHBBHHHHH")  # minute, reservoir cU, battery %, flags, temp cU/h,
-                                              # temp remaining min, alarms bitmask, last-hour cU, bolus remaining cU
+HISTORY_RECORD = struct.Struct(">IHB")       # minute, centi-units, kind (0 basal, 1 bolus, 2 prime)
+HISTORY_PAGE = 20                             # records per response: keeps notifications under a 185-byte BLE MTU
+STATUS_PAYLOAD = struct.Struct(">IHBBHHHHHB") # minute, reservoir cU, battery %, flags, temp cU/h, temp remaining
+                                              # min, alarms bitmask, last-hour cU, bolus remaining cU, state
 FLAG_SUSPENDED = 0x01
 FLAG_TEMP_ACTIVE = 0x02
+
+STATE_RUNNING = 0
+STATE_SUSPENDED = 1
+STATE_NO_RESERVOIR = 2
+STATE_PRIMING = 3
+STATE_NAMES = {STATE_RUNNING: "running", STATE_SUSPENDED: "suspended",
+               STATE_NO_RESERVOIR: "no_reservoir", STATE_PRIMING: "priming"}
 
 
 class ProtocolError(Exception):
