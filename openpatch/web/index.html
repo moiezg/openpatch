@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OpenPatch">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <title>OpenPatch</title>
+</head>
+<body>
+  <section id="login" class="screen hidden">
+    <div class="login-card">
+      <img src="/icon.svg" alt="" width="72" height="72">
+      <h1>OpenPatch</h1>
+      <p class="muted">Enter the access token printed by <code>openpatch serve</code> (or run <code>openpatch token</code>).</p>
+      <form id="login-form">
+        <input id="token-input" type="password" autocomplete="current-password" placeholder="Access token" required>
+        <button type="submit" class="primary">Connect</button>
+      </form>
+      <p id="login-error" class="error"></p>
+    </div>
+  </section>
+
+  <section id="app" class="hidden">
+    <header class="topbar">
+      <span class="brand">OpenPatch</span>
+      <span id="mode-badge" class="badge">…</span>
+    </header>
+
+    <main>
+      <div id="warnings"></div>
+
+      <!-- HOME -->
+      <section id="tab-home" class="tab">
+        <div class="card bg-card">
+          <div class="bg-row">
+            <span id="bg-value" class="bg-value">--</span>
+            <span id="bg-arrow" class="bg-arrow"></span>
+          </div>
+          <div id="bg-sub" class="muted">mg/dL</div>
+          <div class="stats">
+            <div><span class="label">IOB</span><span id="iob">--</span></div>
+            <div><span class="label">COB</span><span id="cob">--</span></div>
+            <div><span class="label">Target</span><span id="target">--</span></div>
+            <div><span class="label">Δ 5 min</span><span id="delta">--</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Last 6 h + 4 h prediction</div>
+          <canvas id="home-chart" class="chart"></canvas>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Loop</div>
+          <div id="loop-summary"></div>
+          <ul id="loop-reasons" class="reasons"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Quick actions</div>
+          <div class="actions">
+            <button data-action="carbs">Log carbs</button>
+            <button data-action="pen">Log pen dose</button>
+            <button data-action="activity">Activity mode</button>
+            <button data-action="cancel-target">End temp target</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Last 24 h</div>
+          <ul id="treatments" class="list"></ul>
+        </div>
+      </section>
+
+      <!-- BOLUS -->
+      <section id="tab-bolus" class="tab hidden">
+        <div class="card">
+          <div class="card-title">Bolus calculator</div>
+          <label>Carbs (g)<input id="b-carbs" type="number" inputmode="decimal" min="0" max="250" value="0"></label>
+          <label>BG (mg/dL) <span class="muted">blank = use CGM</span><input id="b-bg" type="number" inputmode="decimal" min="40" max="400"></label>
+          <div class="presets">
+            <button data-carbs="30">Snack 30</button>
+            <button data-carbs="50">Breakfast 50</button>
+            <button data-carbs="75">Thali 75</button>
+            <button data-carbs="90">Biryani 90</button>
+          </div>
+          <button id="b-calc" class="primary">Calculate</button>
+        </div>
+        <div id="b-result" class="card hidden">
+          <div class="bolus-big"><span id="b-units">0</span> U</div>
+          <div id="b-breakdown" class="muted"></div>
+          <ul id="b-warnings" class="reasons"></ul>
+          <label>Units to give<input id="b-final" type="number" inputmode="decimal" step="0.05" min="0"></label>
+          <button id="b-deliver" class="danger">Log / deliver</button>
+          <p class="muted small">With no pump connected this only logs the pen dose. With a pump it asks for confirmation, then commands the pump.</p>
+        </div>
+      </section>
+
+      <!-- SIMULATE -->
+      <section id="tab-sim" class="tab hidden">
+        <div class="card">
+          <div class="card-title">Virtual patient simulator</div>
+          <label>Scenario<select id="s-scenario"></select></label>
+          <p id="s-desc" class="muted small"></p>
+          <label>Patient<select id="s-patient"></select></label>
+          <div class="row">
+            <label>Days<input id="s-days" type="number" min="1" max="7" value="3"></label>
+            <label>Seed<input id="s-seed" type="number" value="1"></label>
+          </div>
+          <button id="s-run" class="primary">Run open vs closed loop</button>
+        </div>
+        <div id="s-result" class="hidden">
+          <div class="card">
+            <div class="card-title">Results</div>
+            <table id="s-table" class="metrics"></table>
+          </div>
+          <div class="card">
+            <div class="card-title">Glucose (true BG): <span class="key open">open loop</span> <span class="key closed">closed loop</span></div>
+            <canvas id="s-chart" class="chart tall"></canvas>
+            <div class="card-title">Insulin delivery rate (U/h, closed loop)</div>
+            <canvas id="s-ins" class="chart short"></canvas>
+          </div>
+          <div class="card">
+            <div class="card-title">Events</div>
+            <ul id="s-events" class="list"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="tab hidden">
+        <div class="card">
+          <div class="card-title">Therapy profile and limits</div>
+          <p class="muted small">Basal (U/h), ISF (mg/dL per U) and carb ratio (g per U) are lists of
+            [minute-of-day, value]. Use the numbers agreed with your diabetes team, never guesses.</p>
+          <textarea id="cfg-json" spellcheck="false" rows="22"></textarea>
+          <p id="cfg-msg" class="small"></p>
+          <button id="cfg-save" class="primary">Validate &amp; save</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Closed-loop safety gates</div>
+          <ul id="gates" class="list"></ul>
+        </div>
+        <div class="card">
+          <div class="card-title">This device</div>
+          <button id="logout">Forget access token</button>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button data-tab="home" class="active">Home</button>
+      <button data-tab="bolus">Bolus</button>
+      <button data-tab="sim">Simulate</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+  </section>
+
+  <dialog id="prompt">
+    <form method="dialog">
+      <h3 id="prompt-title"></h3>
+      <p id="prompt-text" class="muted"></p>
+      <div id="prompt-fields"></div>
+      <menu>
+        <button value="cancel">Cancel</button>
+        <button value="ok" id="prompt-ok" class="primary">OK</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>
