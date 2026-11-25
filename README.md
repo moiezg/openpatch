@@ -53,3 +53,7 @@ data**. Both are flagged in the app until you replace them in Settings.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .     # then: .venv/bin/openpatch serve
 ```
+
+## License
+[MIT](LICENSE). The software is provided "as is", without warranty of any kind. It is not a medical
+device and has not been reviewed by any regulator. Anyone who builds or runs it does so at their own risk.

@@ -7,6 +7,7 @@ name = "openpatch"
 version = "0.1.0"
 description = "Personal closed-loop insulin research toolkit: MPC controller, safety layer, pump protocol, simulator, web app"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
