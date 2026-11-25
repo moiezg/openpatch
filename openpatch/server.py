@@ -118,9 +118,18 @@ def make_handler(service: LiveService):
                 return service.log_treatment(b.get("type", ""), float(b.get("amount", 0)),
                                              float(b.get("minutes_ago", 0)), **extra)
             if method == "DELETE" and path.startswith("/api/treatments/"):
-                if not service.delete_treatment(path.rsplit("/", 1)[-1]):
+                entry_id = path.rsplit("/", 1)[-1]
+                if any(t["id"] == entry_id and t["type"] == "pump_event" for t in service.treatments.all()):
+                    raise ApiError(403, "pump events cannot be deleted")
+                if not service.delete_treatment(entry_id):
                     raise ApiError(404, "treatment not found")
                 return {"deleted": True}
+            if method == "GET" and path == "/api/pump":
+                return service.pump_view()
+            if method == "POST" and path.startswith("/api/pump/"):
+                action = path.rsplit("/", 1)[-1].replace("-", "_")
+                units = b.get("units")
+                return service.pump_action(action, None if units in (None, "") else float(units))
             if method == "GET" and path == "/api/settings":
                 return service.settings_view()
             if method == "PUT" and path == "/api/settings":
@@ -146,7 +155,7 @@ def make_handler(service: LiveService):
             except (ConfigError, ValueError, KeyError, TypeError) as e:
                 self._json(400, {"error": str(e)})
             except PumpError as e:
-                self._json(502, {"error": f"pump: {e}"})
+                self._json(409, {"error": f"pump refused: {e}"})
             except Exception as e:
                 traceback.print_exc()
                 self._json(500, {"error": f"internal error: {type(e).__name__}"})

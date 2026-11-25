@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -167,7 +168,10 @@ class LiveService:
 
     def settings_view(self) -> dict:
         allowed, missing = self.closed_loop_allowed()
-        view = {k: v for k, v in self.raw.items() if k != "server"}
+        view = json.loads(json.dumps({k: v for k, v in self.raw.items() if k != "server"}))
+        # the pump key never leaves the server: the browser only learns whether one is set
+        pump = view.setdefault("pump", {"type": "none"})
+        pump["key_set"] = bool(pump.pop("key", ""))
         view["closed_loop_active"] = allowed
         view["gates_missing"] = missing
         view["required_gates"] = REQUIRED_GATES
@@ -180,14 +184,44 @@ class LiveService:
                 if key in patch:
                     candidate[key] = patch[key]
             AppConfig.from_json(candidate)   # raises ConfigError on invalid values
-            if candidate.get("pump", {}).get("type") not in ("none", "virtual", "ble"):
-                raise ConfigError("pump.type must be none, virtual or ble")
+            candidate["pump"] = self._validated_pump(candidate.get("pump") or {}, self.raw.get("pump") or {})
+            if not set(candidate.get("gates_completed", [])) <= set(REQUIRED_GATES):
+                raise ConfigError("unknown safety gate name")
             if "profile" in patch:
                 candidate["configured"] = True
+            previous = self.raw
             self.raw = candidate
+            try:
+                self._build()
+            except Exception as e:
+                self.raw = previous
+                self._build()
+                raise ConfigError(f"could not start with these pump settings: {e}") from e
             self._save(candidate)
-            self._build()
             return self.settings_view()
+
+    @staticmethod
+    def _validated_pump(pump: dict, current: dict) -> dict:
+        kind = pump.get("type", "none")
+        if kind not in ("none", "virtual", "ble"):
+            raise ConfigError("pump.type must be none, virtual or ble")
+        out = {"type": kind}
+        key = (pump.get("key") or "").strip().lower()
+        if key:
+            if not re.fullmatch(r"[0-9a-f]{32,128}", key) or len(key) % 2:
+                raise ConfigError("pump key must be 32-128 hex characters (16-64 bytes)")
+            out["key"] = key
+        elif current.get("key"):
+            out["key"] = current["key"]          # blank in the form means "keep the stored key"
+        address = (pump.get("address") or "").strip()
+        if address:
+            out["address"] = address
+        if kind == "ble":
+            if not address:
+                raise ConfigError("a Bluetooth pump needs its address")
+            if "key" not in out:
+                raise ConfigError("a Bluetooth pump needs the key set on it with `op key`")
+        return out
 
     # ---------- engine ----------
 
@@ -233,10 +267,11 @@ class LiveService:
             e.temp_target = None
 
     def _start_loop(self):
-        self._loop_stop.clear()
+        stop = threading.Event()        # one event per loop thread, so a rebuild can never revive an old loop
+        self._loop_stop = stop
 
         def run():
-            while not self._loop_stop.is_set():
+            while not stop.is_set():
                 try:
                     with self._lock:
                         now = now_minutes()
@@ -245,7 +280,7 @@ class LiveService:
                         self.last_error = None
                 except Exception as ex:   # keep looping; the pump falls back to scheduled basal on its own
                     self.last_error = f"{type(ex).__name__}: {ex}"
-                self._loop_stop.wait(self.engine.settings.loop_interval_min * 60)
+                stop.wait(self.engine.settings.loop_interval_min * 60)
 
         self._loop_thread = threading.Thread(target=run, daemon=True, name="loop")
         self._loop_thread.start()
@@ -265,7 +300,17 @@ class LiveService:
                 readings = e.cgm.readings(now, 6 * 60)
             except Exception as ex:
                 cgm_error = f"CGM source unreachable: {ex}"
-            if self.pump_mode() == "none" or not e.decisions or now - e.decisions[-1].time > 6:
+            pump_status = None
+            if self.pump_mode() != "none":
+                try:
+                    pump_status = asdict(e.pump.status())
+                except PumpError as ex:
+                    pump_status = {"error": str(ex)}
+            pump_changed = pump_status is not None and "error" not in pump_status and \
+                (tuple(pump_status["alarms"]), pump_status["state"]) != e.last_pump_signature
+            if pump_changed and not cgm_error:
+                decision = e.run_cycle(now)     # the pump changed under the loop: decide again now
+            elif self.pump_mode() == "none" or not e.decisions or now - e.decisions[-1].time > 6:
                 # advisory snapshot (does not command anything)
                 closed = e.closed_loop
                 e.closed_loop = False
@@ -277,12 +322,6 @@ class LiveService:
                     e.closed_loop = closed
             else:
                 decision = e.decisions[-1]
-            pump_status = None
-            if self.pump_mode() != "none":
-                try:
-                    pump_status = asdict(e.pump.status())
-                except PumpError as ex:
-                    pump_status = {"error": str(ex)}
             latest = readings[-1] if readings else None
             delta = None
             if len(readings) >= 2:
@@ -352,6 +391,60 @@ class LiveService:
 
     def delete_treatment(self, entry_id: str) -> bool:
         return self.treatments.delete(entry_id)
+
+    # ---------- pump control ----------
+
+    def _pump_driver(self) -> ProtocolPumpDriver:
+        if self.pump_mode() == "none" or not isinstance(self.engine.pump, ProtocolPumpDriver):
+            raise ValueError("no pump connected (Settings > Pump)")
+        return self.engine.pump
+
+    def pump_view(self) -> dict:
+        with self._lock:
+            drv = self._pump_driver()
+            st = asdict(drv.status())
+            now = now_minutes()
+            events = [t for t in self.treatments.recent(now, 14 * 1440) if t["type"] == "pump_event"]
+            rewinds = [t["time"] for t in events if t.get("label") == "rewind"]
+            since = max(rewinds) if rewinds else now - 240
+            st["primed_u"] = round(sum(r.units for r in drv.delivery_history(since - 1) if r.kind == "prime"
+                                       and r.time >= since - 1), 2)
+            sites = [t["time"] for t in events if t.get("label") == "site_change"]
+            st["last_site_change"] = max(sites) if sites else None
+            return st
+
+    def pump_action(self, action: str, units: float | None = None) -> dict:
+        with self._lock:
+            drv = self._pump_driver()
+            if action == "suspend":
+                drv.suspend()
+            elif action == "resume":
+                drv.resume()
+            elif action == "clear_alarms":
+                drv.clear_alarms()
+            elif action == "rewind":
+                drv.rewind()
+            elif action == "set_reservoir":
+                if units is None or not 10 <= units <= 300:
+                    raise ValueError("reservoir must hold 10-300 U")
+                drv.set_reservoir(units)
+            elif action == "prime":
+                if units is None or not 0.05 <= units <= 3:
+                    raise ValueError("prime 0.05-3 U at a time")
+                drv.prime(units)
+            elif action == "site_change_done":
+                pass
+            else:
+                raise ValueError(f"unknown pump action {action}")
+            label = "site_change" if action == "site_change_done" else action
+            self.treatments.add("pump_event", units or 0, now_minutes(), label=label)
+            try:
+                now = now_minutes()
+                self._sync_engine_inputs(now)
+                self.engine.run_cycle(now)       # react at once (e.g. resume -> loop takes over again)
+            except Exception as ex:
+                self.last_error = f"{type(ex).__name__}: {ex}"
+            return self.pump_view()
 
     def decisions(self, limit: int = 288) -> list[dict]:
         return [d.to_json(with_prediction=False) for d in self.engine.decisions[-limit:]]

@@ -73,6 +73,7 @@ class LoopEngine:
         self.carbs: list[CarbEntry] = []
         self.decisions: list[Decision] = []
         self.temp_target: tuple[float, float, str] | None = None   # (until, mg/dL, label)
+        self.last_pump_signature = None                            # pump (alarms, state) the last decision saw
 
     def set_temp_target(self, now: float, target: float, duration_min: float, label: str = "activity"):
         if not 100 <= target <= 200 or not 0 < duration_min <= 24 * 60:
@@ -170,11 +171,14 @@ class LoopEngine:
             chosen = self.controller.prediction_for(fast, isf, sched, plan.rate)
 
         status = self.pump.status()
+        self.last_pump_signature = (tuple(status.alarms), status.state)
         ctx = SafetyContext(
             bg=bg, cgm_age_min=age if age is not None else 1e9, cgm_valid=valid, iob=iob,
             scheduled_basal=sched, max_scheduled_basal=p.basal.max(), target=target,
             bg_slope_per5=slope, base_prediction=base, chosen_prediction=chosen,
-            delivered_24h=sum(r.units for r in history), pump_alarms=status.alarms,
+            delivered_24h=sum(r.units for r in history),
+            # a suspended pump or one mid site-change is never sent temp basals
+            pump_alarms=status.alarms + ([f"pump {status.state}"] if status.state != "running" else []),
         )
         result = self.guard.apply(proposed if proposed is not None else sched, ctx)
 

@@ -35,6 +35,7 @@
     </header>
 
     <main>
+      <div id="pump-alarms"></div>
       <div id="warnings"></div>
 
       <!-- HOME -->
@@ -50,6 +51,21 @@
             <div><span class="label">COB</span><span id="cob">--</span></div>
             <div><span class="label">Target</span><span id="target">--</span></div>
             <div><span class="label">Δ 5 min</span><span id="delta">--</span></div>
+          </div>
+        </div>
+
+        <div id="pump-card" class="card hidden">
+          <div class="card-title">Pump <span id="pump-state" class="pill"></span></div>
+          <div class="stats">
+            <div><span class="label">Reservoir</span><span id="p-res">--</span></div>
+            <div><span class="label">Battery</span><span id="p-batt">--</span></div>
+            <div><span class="label">Now</span><span id="p-rate">--</span></div>
+            <div><span class="label">Last hour</span><span id="p-hour">--</span></div>
+          </div>
+          <div id="p-extra" class="muted small"></div>
+          <div class="actions pump-actions">
+            <button id="p-suspend">Suspend</button>
+            <button id="p-site" class="primary">Change site</button>
           </div>
         </div>
 
@@ -135,10 +151,22 @@
         </div>
       </section>
 
+      <!-- SITE CHANGE (opened from the pump card) -->
+      <section id="tab-site" class="tab hidden">
+        <div class="card">
+          <div class="steps" id="site-steps"></div>
+          <h2 id="site-title"></h2>
+          <div id="site-body"></div>
+          <div id="site-actions" class="site-actions"></div>
+          <p id="site-msg" class="small"></p>
+        </div>
+        <button id="site-cancel">Leave site change</button>
+      </section>
+
       <!-- SETTINGS -->
       <section id="tab-settings" class="tab hidden">
         <div class="card">
-          <div class="card-title">Therapy profile and limits</div>
+          <div class="card-title">Therapy profile, limits and CGM</div>
           <p class="muted small">Basal (U/h), ISF (mg/dL per U) and carb ratio (g per U) are lists of
             [minute-of-day, value]. Use the numbers agreed with your diabetes team, never guesses.</p>
           <textarea id="cfg-json" spellcheck="false" rows="22"></textarea>
@@ -146,8 +174,35 @@
           <button id="cfg-save" class="primary">Validate &amp; save</button>
         </div>
         <div class="card">
+          <div class="card-title">Pump connection</div>
+          <label>Pump
+            <select id="pm-type">
+              <option value="none">No pump (pens): advice only</option>
+              <option value="virtual">Virtual pump: dry run, no insulin</option>
+              <option value="ble">Real pump over Bluetooth</option>
+            </select>
+          </label>
+          <label id="pm-address-row">Bluetooth address <span class="muted">(shown by the pump / a BLE scanner)</span>
+            <input id="pm-address" autocomplete="off" spellcheck="false" placeholder="e.g. D4:3A:2F:… or a macOS UUID">
+          </label>
+          <label>Command key <span id="pm-key-state" class="muted"></span>
+            <input id="pm-key" type="password" autocomplete="off" spellcheck="false" placeholder="leave blank to keep the stored key">
+          </label>
+          <div class="actions">
+            <button id="pm-generate">Generate new key</button>
+            <button id="pm-save" class="primary">Save pump settings</button>
+          </div>
+          <p id="pm-generated" class="small hidden"></p>
+          <p id="pm-msg" class="small"></p>
+        </div>
+        <div class="card">
           <div class="card-title">Closed-loop safety gates</div>
-          <ul id="gates" class="list"></ul>
+          <p class="muted small">Tick a gate only when its evidence is recorded (docs/SAFETY.md). A real pump
+            stays in advice mode until every gate is ticked and closed loop is switched on.</p>
+          <ul id="gates" class="list gates"></ul>
+          <label class="toggle"><input id="cl-enabled" type="checkbox"> Closed loop enabled</label>
+          <button id="gates-save" class="primary">Save gates</button>
+          <p id="gates-msg" class="small"></p>
         </div>
         <div class="card">
           <div class="card-title">This device</div>

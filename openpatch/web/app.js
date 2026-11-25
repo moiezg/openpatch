@@ -162,6 +162,7 @@ function renderWarnings(list) {
 
 function renderHome(s) {
   renderWarnings(s.warnings || []);
+  renderPump(s);
   const badge = $('#mode-badge');
   badge.textContent = s.mode; badge.className = 'badge ' + s.mode;
 
@@ -187,7 +188,9 @@ function renderHome(s) {
     const rate = d.rate === null ? `scheduled basal ${d.scheduled_basal} U/h` : `temp basal ${d.rate} U/h`;
     const verb = s.mode === 'closed' ? 'Running' : 'Would run';
     const label = s.mode === 'closed' ? d.mode : (d.mode === 'CLOSED' ? 'ADVICE' : d.mode);
-    summary.textContent = `${label} · ${verb} ${rate}` + (s.pump_mode === 'none' ? ' (advisory only: no pump)' : '');
+    summary.textContent = d.mode === 'BLOCKED'
+      ? 'BLOCKED · Loop paused: no insulin commands until the pump is running again'
+      : `${label} · ${verb} ${rate}` + (s.pump_mode === 'none' ? ' (advisory only: no pump)' : '');
   }
   $('#loop-reasons').replaceChildren(...(d.reasons || []).map((r) => el('li', {}, r)));
 
@@ -207,10 +210,14 @@ function renderHome(s) {
 
   const names = { carbs: 'Carbs', bolus: 'Pen bolus', bolus_request: 'Pump bolus', temp_target: 'Temp target', temp_target_cancel: 'Temp target ended', note: 'Note' };
   const units = { carbs: ' g', bolus: ' U', bolus_request: ' U', temp_target: ' mg/dL', temp_target_cancel: '', note: '' };
+  const label = (t) => t.type === 'pump_event' ? 'Pump: ' + (PUMP_EVENT_NAMES[t.label] || t.label) : (names[t.type] || t.type);
+  const amount = (t) => t.type === 'temp_target_cancel' || (t.type === 'pump_event' && !t.amount) ? ''
+    : `${t.amount}${t.type === 'pump_event' ? ' U' : (units[t.type] || '')}`;
   $('#treatments').replaceChildren(...(s.treatments.length ? s.treatments.map((t) => el('li', {},
-    el('span', {}, `${clock(t.time)}  ${names[t.type] || t.type}`),
-    el('span', {}, t.type === 'temp_target_cancel' ? '' : `${t.amount}${units[t.type] || ''}`,
-      el('button', { class: 'del', title: 'Delete', onclick: () => deleteTreatment(t.id) }, '✕')))) : [el('li', { class: 'muted' }, 'Nothing logged.')]));
+    el('span', {}, `${clock(t.time)}  ${label(t)}`),
+    el('span', {}, amount(t),
+      t.type === 'pump_event' ? '' :   // pump events are a record of what the pump did: not deletable
+        el('button', { class: 'del', title: 'Delete', onclick: () => deleteTreatment(t.id) }, '✕')))) : [el('li', { class: 'muted' }, 'Nothing logged.')]));
 }
 
 async function deleteTreatment(id) {
@@ -343,19 +350,246 @@ function renderSim(r) {
   $('#s-events').replaceChildren(...ev.map(([t, txt]) => el('li', {}, el('span', {}, simClock(t)), el('span', {}, txt))));
 }
 
+// ---------- pump: card, alarms, suspend/resume ----------
+
+const PUMP_EVENT_NAMES = { suspend: 'suspended', resume: 'resumed', clear_alarms: 'alarm cleared', rewind: 'rewound',
+  set_reservoir: 'new reservoir', prime: 'primed', site_change: 'site changed' };
+const STATE_NAMES = { running: 'running', suspended: 'suspended', no_reservoir: 'no reservoir', priming: 'priming' };
+const ALARM_TEXT = {
+  OCCLUSION: ['Blocked line: insulin is not reaching you',
+    'Check your BG now and be ready to use a pen. Replace the infusion set (Change site), then clear the alarm.', true],
+  RESERVOIR_EMPTY: ['Reservoir empty: delivery stopped', 'Change the reservoir and infusion set now. Use a pen if BG is rising.', true],
+  HOURLY_CAP: ['Hourly safety cap reached: delivery stopped',
+    'The pump delivered as much as its hourly limit allows. Check for a fault or a wrong command before clearing.', false],
+  MOTOR_FAULT: ['Motor fault: delivery stopped', 'The pump could not move the plunger. Use pens and inspect the pump.', true],
+  RESERVOIR_LOW: ['Reservoir low', 'Plan a site change soon.', true],
+  BATTERY_LOW: ['Pump battery low', 'Charge the pump at the next reservoir change.', false],
+  RESTARTED: ['Pump restarted', 'It resumed your scheduled basal. Any bolus in progress was stopped: check your IOB before dosing again.', false],
+};
+
+function renderPump(s) {
+  const card = $('#pump-card'), alarmsBox = $('#pump-alarms');
+  if (s.pump_mode === 'none' || !s.pump) { card.classList.add('hidden'); alarmsBox.replaceChildren(); return; }
+  card.classList.remove('hidden');
+  const p = s.pump;
+  if (p.error) {
+    alarmsBox.replaceChildren(el('div', { class: 'alarm' }, el('strong', {}, 'Cannot reach the pump'),
+      'Basal continues on its own schedule. ' + p.error));
+    return;
+  }
+  const pill = $('#pump-state');
+  const stopped = p.alarms.length > 0;
+  pill.textContent = stopped ? 'stopped' : (STATE_NAMES[p.state] || p.state);
+  pill.className = 'pill ' + (stopped ? 'stopped' : p.state);
+  $('#p-res').textContent = p.reservoir_u.toFixed(1) + ' U';
+  $('#p-batt').textContent = p.battery_pct + '%';
+  $('#p-rate').textContent = p.state !== 'running' || p.alarms.length ? '0 U/h'
+    : (p.temp_rate !== null ? p.temp_rate.toFixed(2) + ' U/h' : 'basal');
+  $('#p-hour').textContent = p.delivered_last_hour.toFixed(2) + ' U';
+  const extra = [];
+  if (p.temp_rate !== null) extra.push(`Temp basal ${p.temp_rate} U/h, ${p.temp_remaining_min} min left`);
+  if (p.bolus_remaining > 0) extra.push(`Bolus in progress: ${p.bolus_remaining} U to go`);
+  $('#p-extra').textContent = extra.join(' · ');
+  const sus = $('#p-suspend');
+  sus.textContent = p.state === 'running' ? 'Suspend' : 'Resume';
+  sus.disabled = p.state === 'no_reservoir' || p.state === 'priming';
+
+  const items = [...p.alarms, ...p.warnings].map((code) => {
+    const [title, text, siteChange] = ALARM_TEXT[code] || [code, '', false];
+    const stop = p.alarms.includes(code);
+    const actions = [];
+    if (siteChange) actions.push(el('button', { onclick: () => openSiteChange() }, 'Change site'));
+    // low reservoir / battery clear themselves once fixed; only stop alarms and RESTARTED need a tap
+    if (stop || code === 'RESTARTED') {
+      actions.push(el('button', { onclick: () => pumpAction('clear-alarms') }, stop ? 'Clear alarm' : 'Acknowledge'));
+    }
+    return el('div', { class: 'alarm' + (stop ? '' : ' warn') }, el('strong', {}, title), text,
+      el('div', { class: 'alarm-actions' }, ...actions));
+  });
+  alarmsBox.replaceChildren(...items);
+}
+
+async function pumpAction(action, body) {
+  try {
+    const p = await api('POST', '/api/pump/' + action, body || {});
+    await refresh();
+    return p;
+  } catch (e) {
+    const blocked = action === 'clear-alarms' && /current state/.test(e.message);
+    toast(blocked ? 'The line is still blocked. Replace the infusion set (Change site), then clear the alarm.' : e.message);
+    return null;
+  }
+}
+
+async function toggleSuspend() {
+  const p = lastStatus && lastStatus.pump;
+  if (!p) return;
+  if (p.state === 'running') {
+    if (!confirm('Suspend stops ALL insulin, including basal. Resume within 1-2 hours or use pens. Suspend now?')) return;
+    await pumpAction('suspend');
+  } else {
+    await pumpAction('resume');
+  }
+}
+
+// ---------- site change walkthrough ----------
+
+const site = { step: 0, timer: null, pump: null };
+const SITE_STEPS = [
+  { title: 'Change site and reservoir', body: () => [
+      el('p', {}, 'Every 2–3 days. Have ready:'),
+      el('ol', {}, el('li', {}, 'a new reservoir and infusion set'), el('li', {}, 'your insulin vial at room temperature'),
+        el('li', {}, 'an alcohol swab and a tissue')),
+      el('p', { class: 'muted' }, 'Insulin delivery stops until the last step: keep it under 30 minutes.')],
+    actions: () => [btn('Start: suspend insulin', 'primary', async () => {
+      if (site.pump.state === 'running' && !(await pumpAction('suspend'))) return;
+      next();
+    })] },
+  { title: 'Disconnect and rewind', body: () => [
+      el('p', {}, 'Disconnect the infusion set from your body and remove the old set.'),
+      el('p', {}, 'Open the reservoir door and take out the old reservoir, then rewind the plunger.')],
+    actions: () => [btn('Rewind', 'primary', async () => { if (await pumpAction('rewind')) next(); })] },
+  { title: 'Fill and insert the new reservoir', body: () => [
+      el('ol', {}, el('li', {}, 'Wipe the vial top. Fill the reservoir slowly through the transfer guard.'),
+        el('li', {}, 'Hold it needle-up and tap out every bubble: bubbles mean missed insulin.'),
+        el('li', {}, 'Attach the new set’s tubing, put the reservoir in and close the door.')),
+      el('label', {}, 'Units in the reservoir', el('input', { id: 'site-units', type: 'number', inputmode: 'decimal', min: '10', max: '300', value: '180' }))],
+    actions: () => [btn('Set reservoir', 'primary', async () => {
+      const units = +$('#site-units').value;
+      if (await pumpAction('set-reservoir', { units })) next();
+    })] },
+  { title: 'Prime the tubing', body: () => [
+      el('p', {}, 'Point the needle end up over a tissue, NOT into your body. Prime until drops appear at the needle tip.'),
+      el('div', { class: 'big-number', id: 'site-primed' }, (site.pump.primed_u || 0).toFixed(2) + ' U primed'),
+      el('p', { class: 'muted small' }, 'Each step takes up to a minute. Long tubing can need 10 U or more.')],
+    actions: () => [el('div', { class: 'row' },
+        btn('Prime 1 U', '', () => pumpAction('prime', { units: 1 })),
+        btn('Prime 3 U', '', () => pumpAction('prime', { units: 3 }))),
+      btn('I see drops at the needle', 'primary', () => {
+        if (!(site.pump.primed_u > 0)) return toast('Prime at least once first.');
+        next();
+      })] },
+  { title: 'Insert the new set', body: () => [
+      el('p', {}, 'Insert the set at a fresh site:'),
+      el('ol', {}, el('li', {}, 'at least 2.5 cm from the last site'),
+        el('li', {}, '7–8 cm away from your CGM sensor'),
+        el('li', {}, 'rotate: abdomen, thighs, back of arms, upper buttocks'),
+        el('li', {}, 'avoid lumpy or scarred skin'))],
+    actions: () => [btn('Set inserted and connected', 'primary', next)] },
+  { title: 'Resume insulin', body: () => [
+      el('p', {}, 'Resume delivery. A soft cannula then needs a small fill (see your set’s leaflet, usually 0.3–0.5 U). That fill counts as insulin you received.')],
+    actions: () => [btn('Resume insulin', 'primary', async () => {
+      if (site.pump.state !== 'running' && !(await pumpAction('resume'))) return;
+      next();
+    })] },
+  { title: 'Fill the cannula', body: () => [
+      el('p', {}, 'Choose your set’s cannula fill, or skip for a steel-needle set.'),
+      el('p', { class: 'muted small' }, 'Check your BG in 1–2 hours to confirm the new site works.')],
+    actions: () => [el('div', { class: 'row' },
+        btn('Fill 0.3 U', '', () => cannulaFill(0.3)), btn('Fill 0.5 U', '', () => cannulaFill(0.5))),
+      btn('Done', 'primary', finishSiteChange)] },
+];
+
+function btn(text, cls, onclick) {
+  return el('button', { class: cls, onclick: async (ev) => {
+    ev.target.disabled = true;
+    try { await onclick(); } finally { ev.target.disabled = false; }
+  } }, text);
+}
+
+async function cannulaFill(units) {
+  if (!confirm(`Deliver ${units} U to fill the cannula?`)) return;
+  try { await api('POST', '/api/bolus', { units, carbs: 0, confirm: true }); $('#site-msg').textContent = `${units} U cannula fill sent.`; }
+  catch (e) { toast(e.message); }
+}
+
+async function finishSiteChange() {
+  await pumpAction('site-change-done');
+  closeSiteChange();
+}
+
+function next() { site.step = Math.min(site.step + 1, SITE_STEPS.length - 1); renderSite(); }
+
+function renderSite() {
+  const st = SITE_STEPS[site.step];
+  $('#site-steps').replaceChildren(...SITE_STEPS.map((_, i) => el('span', { class: i <= site.step ? 'done' : '' })));
+  $('#site-title').textContent = st.title;
+  $('#site-body').replaceChildren(...st.body());
+  $('#site-actions').replaceChildren(...st.actions());
+  $('#site-msg').textContent = '';
+}
+
+async function pollSite() {
+  try {
+    site.pump = await api('GET', '/api/pump');
+    const primed = $('#site-primed');
+    if (primed) primed.textContent = (site.pump.primed_u || 0).toFixed(2) + ' U primed';
+  } catch (e) { /* shown on the next action */ }
+}
+
+async function openSiteChange() {
+  try { site.pump = await api('GET', '/api/pump'); } catch (e) { return toast(e.message); }
+  // pick up where a previous, unfinished change left off
+  site.step = { running: 0, suspended: 1, no_reservoir: 2, priming: 3 }[site.pump.state] ?? 0;
+  if (site.pump.state === 'priming' && site.pump.primed_u > 0) site.step = 3;
+  switchTab('site');
+  renderSite();
+  clearInterval(site.timer);
+  site.timer = setInterval(pollSite, 5000);
+}
+
+function closeSiteChange() {
+  clearInterval(site.timer);
+  site.timer = null;
+  switchTab('home');
+  refresh();
+}
+
+function leaveSiteChange() {
+  const st = site.pump && site.pump.state;
+  if (st && st !== 'running' &&
+      !confirm('Insulin delivery is still stopped. Leave anyway? You can come back with "Change site".')) return;
+  closeSiteChange();
+}
+
 // ---------- settings ----------
 
-const EDITABLE = ['profile', 'safety', 'cgm', 'pump', 'closed_loop_enabled', 'gates_completed'];
+const EDITABLE = ['profile', 'safety', 'cgm'];
+const GATE_TEXT = {
+  G0_simulation: 'Simulated all scenarios with your profile shape: below 70 < 4%, below 54 < 1%',
+  G1_bench_accuracy: 'Saline on a 0.001 g scale: every hour within ±5%, boluses within ±5%',
+  G2_fault_injection: 'Blocked line, power pull, BLE loss, duplicate frames, runaway motor all alarm or refuse',
+  G3_saline_wear: '14 days wearing the pump with saline: adhesive, water, night-time alarms',
+  G4_advisory_2_weeks: '2 weeks of dry run against your real CGM, every decision reviewed',
+  G5_clinician_informed: 'Your diabetes team has seen the plan, limits and data',
+};
+let settingsCache = null;
 
 async function loadSettings() {
   try {
     const s = await api('GET', '/api/settings');
+    settingsCache = s;
     const editable = {};
     for (const k of EDITABLE) editable[k] = s[k];
     $('#cfg-json').value = JSON.stringify(editable, null, 2);
-    $('#gates').replaceChildren(...s.required_gates.map((g) => el('li', {},
-      el('span', {}, g.replaceAll('_', ' ')), el('span', {}, (s.gates_completed || []).includes(g) ? '✅' : '⬜'))));
     $('#cfg-msg').textContent = s.configured === false ? 'Profile is still the placeholder.' : '';
+
+    const pump = s.pump || { type: 'none' };
+    $('#pm-type').value = pump.type;
+    $('#pm-address').value = pump.address || '';
+    $('#pm-key').value = '';
+    $('#pm-key-state').textContent = pump.key_set ? '(a key is stored)' : '(no key stored)';
+    $('#pm-address-row').classList.toggle('hidden', pump.type !== 'ble');
+    $('#pm-generated').classList.add('hidden');
+    $('#pm-msg').textContent = '';
+
+    const done = new Set(s.gates_completed || []);
+    $('#gates').replaceChildren(...s.required_gates.map((g) => el('li', {},
+      el('label', {}, Object.assign(el('input', { type: 'checkbox', 'data-gate': g }), { checked: done.has(g) }),
+        el('span', {}, g.replaceAll('_', ' '), el('span', { class: 'gate-desc' }, GATE_TEXT[g] || ''))))));
+    $('#cl-enabled').checked = !!s.closed_loop_enabled;
+    $('#gates-msg').textContent = s.closed_loop_active ? 'Closed loop is ACTIVE.'
+      : (s.pump.type === 'ble' && s.gates_missing.length ? `Advice mode: ${s.gates_missing.length} gate(s) not ticked.` : '');
   } catch (e) { $('#cfg-msg').textContent = e.message; }
 }
 
@@ -363,6 +597,7 @@ async function saveSettings() {
   const msg = $('#cfg-msg');
   let body;
   try { body = JSON.parse($('#cfg-json').value); } catch (e) { msg.textContent = 'Invalid JSON: ' + e.message; return; }
+  for (const k of Object.keys(body)) if (!EDITABLE.includes(k)) delete body[k];
   try {
     await api('PUT', '/api/settings', body);
     msg.textContent = 'Saved.'; msg.className = 'small';
@@ -370,11 +605,47 @@ async function saveSettings() {
   } catch (e) { msg.textContent = e.message; msg.className = 'small error'; }
 }
 
+function generateKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  $('#pm-key').value = hex;
+  $('#pm-key').type = 'text';
+  const out = $('#pm-generated');
+  out.classList.remove('hidden');
+  out.replaceChildren('Copy this key into the pump over USB with ', el('code', {}, 'op key ' + hex),
+    '. It is shown only now; after saving, the app never displays it again.');
+}
+
+async function savePump() {
+  const msg = $('#pm-msg');
+  const type = $('#pm-type').value;
+  if (type === 'ble' && !confirm('Connect to a real pump? Until every safety gate is ticked it stays in advice mode.')) return;
+  try {
+    await api('PUT', '/api/settings', { pump: { type, address: $('#pm-address').value.trim(), key: $('#pm-key').value.trim() } });
+    $('#pm-key').type = 'password';
+    await loadSettings();
+    msg.textContent = 'Pump settings saved.'; msg.className = 'small';
+    refresh();
+  } catch (e) { msg.textContent = e.message; msg.className = 'small error'; }
+}
+
+async function saveGates() {
+  const gates = $$('[data-gate]').filter((c) => c.checked).map((c) => c.dataset.gate);
+  const enabled = $('#cl-enabled').checked;
+  if (enabled && !confirm('Switch on automatic insulin adjustment? Keep pens, a meter and glucagon with you.')) return;
+  try {
+    await api('PUT', '/api/settings', { gates_completed: gates, closed_loop_enabled: enabled });
+    await loadSettings();
+    refresh();
+  } catch (e) { $('#gates-msg').textContent = e.message; }
+}
+
 // ---------- shell ----------
 
 function switchTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('hidden', t.id !== 'tab-' + name));
   $$('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  if (name !== 'site' && site.timer) { clearInterval(site.timer); site.timer = null; }
   if (name === 'settings') loadSettings();
   if (name === 'home' && lastStatus) renderHome(lastStatus);
   window.scrollTo(0, 0);
@@ -415,6 +686,13 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#b-deliver').addEventListener('click', deliverBolus);
   $('#s-run').addEventListener('click', runSim);
   $('#cfg-save').addEventListener('click', saveSettings);
+  $('#p-suspend').addEventListener('click', toggleSuspend);
+  $('#p-site').addEventListener('click', openSiteChange);
+  $('#site-cancel').addEventListener('click', leaveSiteChange);
+  $('#pm-type').addEventListener('change', () => $('#pm-address-row').classList.toggle('hidden', $('#pm-type').value !== 'ble'));
+  $('#pm-generate').addEventListener('click', generateKey);
+  $('#pm-save').addEventListener('click', savePump);
+  $('#gates-save').addEventListener('click', saveGates);
   $('#logout').addEventListener('click', () => { localStorage.removeItem(TOKEN_KEY); showLogin(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && meta) refresh(); });
   window.addEventListener('resize', () => { if (lastStatus && !$('#tab-home').classList.contains('hidden')) renderHome(lastStatus); });
